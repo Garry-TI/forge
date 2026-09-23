@@ -3,6 +3,9 @@ set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="$DIR/scripts/generate_card_animation.py"
+if [ ! -f "$SCRIPT_PATH" ]; then
+    SCRIPT_PATH="$DIR/../../../scripts/generate_card_animation.py"
+fi
 
 if [ -z "$1" ]; then
     echo "===================================================================="
