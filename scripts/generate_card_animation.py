@@ -73,60 +73,22 @@ def get_platform_cache_dir() -> Path:
 
 
 def get_default_target_dirs() -> list[str]:
-    """Locations where animated cards are discovered by both Desktop and Mobile Forge."""
-    cache_dir = get_platform_cache_dir()
+    """Target directory for animated cards deployment - strictly in target distribution."""
+    snapshot_dir = Path("/System/Volumes/Data/ugreen_projects/forge/forge-installer/target/forge-installer-2.0.15-SNAPSHOT")
+    if not snapshot_dir.is_dir():
+        snapshot_dir = REPO_ROOT / "forge-installer" / "target" / "forge-installer-2.0.15-SNAPSHOT"
+    if sys.platform == "win32" and not snapshot_dir.is_dir():
+        snapshot_dir = Path(r"D:\projects\forge\forge-installer\target\forge-installer-2.0.15-SNAPSHOT")
+
     targets = [
-        # Main project repository resource dirs
-        str(REPO_ROOT / "res" / "animated_cards"),
-        str(REPO_ROOT / "forge-gui" / "res" / "animated_cards"),
+        str(snapshot_dir / "res" / "animated_cards"),
     ]
 
-    # Target folder in forge-installer and all app instances below it
-    installer_target = REPO_ROOT / "forge-installer" / "target"
-    if installer_target.is_dir():
-        # 1. Directly in installer target
-        targets.append(str(installer_target / "res" / "animated_cards"))
+    app_res = snapshot_dir / "Forge.app" / "Contents" / "Resources" / "res" / "animated_cards"
+    if (snapshot_dir / "Forge.app").is_dir():
+        targets.append(str(app_res))
+        targets.append(str(snapshot_dir / "Forge.app" / "res" / "animated_cards"))
 
-        # 2. Recursively find all .app bundles and all app instances below forge-installer/target
-        for root, dirs, _ in os.walk(installer_target):
-            rpath = Path(root)
-
-            # Check for any .app bundle
-            for d in dirs:
-                if d.endswith(".app"):
-                    app_dir = rpath / d
-                    targets.append(str(app_dir / "Contents" / "Resources" / "res" / "animated_cards"))
-                    targets.append(str(app_dir / "Contents" / "MacOS" / "res" / "animated_cards"))
-                    targets.append(str(app_dir / "res" / "animated_cards"))
-                    targets.append(str(app_dir.parent / "res" / "animated_cards"))
-
-            # Check for any directory named 'res'
-            if rpath.name == "res":
-                targets.append(str(rpath / "animated_cards"))
-            elif (rpath / "res").is_dir():
-                targets.append(str(rpath / "res" / "animated_cards"))
-
-    # Local user cache pics dir
-    targets.append(str(cache_dir / "pics" / "cards" / "animated_cards"))
-    # Local user cache root
-    targets.append(str(cache_dir / "animated_cards"))
-
-    # macOS application locations if Forge.app is installed
-    if sys.platform == "darwin":
-        for app_path in [Path("/Applications/Forge.app"), Path.home() / "Applications" / "Forge.app"]:
-            if app_path.is_dir():
-                targets.append(str(app_path / "Contents" / "Resources" / "res" / "animated_cards"))
-                targets.append(str(app_path / "res" / "animated_cards"))
-
-    # Windows fallback paths if running on Windows
-    if sys.platform == "win32":
-        targets.extend([
-            r"D:\projects\forge\res\animated_cards",
-            r"D:\projects\forge\forge-gui\res\animated_cards",
-            r"D:\projects\forge\forge-installer\target\forge-installer-2.0.15-SNAPSHOT\res\animated_cards",
-        ])
-
-    # Deduplicate while preserving order
     seen = set()
     unique = []
     for t in targets:
