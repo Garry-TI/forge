@@ -637,20 +637,54 @@ def process_card_animation(
 
         # 4. Deploy to all active Forge destinations
         print("\n[*] Deploying animated frames to Forge directories:")
-        target_subfolders = [card_name.strip()]
-        if art_index is not None:
-            indexed_folder = f"{card_name.strip()}{art_index}"
-            if indexed_folder not in target_subfolders:
-                target_subfolders.append(indexed_folder)
+        clean_card = card_name.strip()
+        clean_set = set_code.strip()
+        target_subfolders = []
+        target_dirs = get_default_target_dirs()
+
         if card_number:
-            col_folder = f"{card_name.strip()}_{str(card_number).strip()}"
-            if col_folder not in target_subfolders:
-                target_subfolders.append(col_folder)
+            clean_num = str(card_number).strip()
+            # Clean up any stale unnumbered folder that would inadvertently match ALL arts/cards with this name
+            for base_target in target_dirs:
+                stale_bare = os.path.join(base_target, clean_card)
+                if os.path.isdir(stale_bare):
+                    try:
+                        shutil.rmtree(stale_bare)
+                        print(f"  [CLEANUP] Removed stale bare folder to avoid overriding all arts: {stale_bare}")
+                    except Exception as ex:
+                        print(f"  [WARN] Could not remove stale bare folder {stale_bare}: {ex}")
+
+            # Specific collector number / art variant deployment targets
+            target_subfolders.append(f"{clean_card}_{clean_num}")
+            target_subfolders.append(f"{clean_set}_{clean_card}_{clean_num}")
+            target_subfolders.append(f"{clean_set}_{clean_num}")
+            target_subfolders.append(os.path.join(clean_set, f"{clean_card}_{clean_num}"))
+            target_subfolders.append(os.path.join(clean_set, clean_num))
+            if art_index is not None:
+                target_subfolders.append(f"{clean_card}{art_index}")
+                target_subfolders.append(f"{clean_set}_{clean_card}{art_index}")
+                target_subfolders.append(os.path.join(clean_set, f"{clean_card}{art_index}"))
+        else:
+            target_subfolders.append(clean_card)
+            target_subfolders.append(f"{clean_set}_{clean_card}")
+            target_subfolders.append(os.path.join(clean_set, clean_card))
+            if art_index is not None:
+                target_subfolders.append(f"{clean_card}{art_index}")
+                target_subfolders.append(f"{clean_set}_{clean_card}{art_index}")
+                target_subfolders.append(os.path.join(clean_set, f"{clean_card}{art_index}"))
+
+        # Deduplicate while preserving order
+        seen_subs = set()
+        deduped_subs = []
+        for s in target_subfolders:
+            norm_s = os.path.normpath(s)
+            if norm_s not in seen_subs:
+                seen_subs.add(norm_s)
+                deduped_subs.append(s)
 
         deployed_count = 0
-        target_dirs = get_default_target_dirs()
         for base_target in target_dirs:
-            for sub in target_subfolders:
+            for sub in deduped_subs:
                 dest_dir = os.path.join(base_target, sub)
                 try:
                     os.makedirs(dest_dir, exist_ok=True)

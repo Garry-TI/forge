@@ -217,25 +217,28 @@ public enum CardZoomer {
      */
     private void setImage() {
         final String cardName = thisCard != null ? thisCard.getName() : null;
+        String edition = null;
         int artIndex = 0;
         String collectorNum = null;
         if (thisCard != null && thisCard.getCard() != null) {
             IPaperCard pc = thisCard.getCard().getPaperCard();
             if (pc != null) {
+                edition = pc.getEdition();
                 artIndex = pc.getArtIndex();
                 collectorNum = pc.getCollectorNumber();
             }
         }
 
+        final String finalEdition = edition;
         final int finalArtIndex = artIndex;
         final String finalCollectorNum = collectorNum;
-        final boolean hasAnim = cardName != null && CardAnimationManager.hasAnimation(cardName, finalArtIndex, finalCollectorNum);
+        final boolean hasAnim = cardName != null && CardAnimationManager.hasAnimation(cardName, finalEdition, finalArtIndex, finalCollectorNum);
 
         if (hasAnim) {
             imagePanel = new FImagePanel() {
                 @Override
                 public void paint(java.awt.Graphics g) {
-                    BufferedImage frame = CardAnimationManager.getCurrentFrame(cardName, finalArtIndex, finalCollectorNum);
+                    BufferedImage frame = CardAnimationManager.getCurrentFrame(cardName, finalEdition, finalArtIndex, finalCollectorNum);
                     if (frame != null) {
                         setAnimatedImage(frame);
                     }
@@ -243,7 +246,7 @@ public enum CardZoomer {
                 }
             };
             CardAnimationManager.register(imagePanel, cardName);
-            BufferedImage frame = CardAnimationManager.getCurrentFrame(cardName, finalArtIndex, finalCollectorNum);
+            BufferedImage frame = CardAnimationManager.getCurrentFrame(cardName, finalEdition, finalArtIndex, finalCollectorNum);
             if (frame != null) {
                 imagePanel.setAnimatedImage(frame);
             }
