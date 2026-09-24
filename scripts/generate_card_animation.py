@@ -6,20 +6,21 @@ Automates the extraction, scaling, compositing, and deployment of animated card 
 for both Forge Desktop and Forge Mobile/Adventure front-ends.
 
 Usage:
-  python generate_card_animation.py <SET> <CARD_NAME> <VIDEO_PATH> [<CARD_NUMBER>]
+  python generate_card_animation.py <SET> <CARD_NAME> <VIDEO_PATH> <CARD_NUMBER>
   python generate_card_animation.py <SET> <CARD_NAME> <CARD_NUMBER> <VIDEO_PATH>
-  python generate_card_animation.py --set AFR --card "Improvised Weaponry" --video "clip.mp4"
+  python generate_card_animation.py --set AFR --card "Improvised Weaponry" --number 150 --video "clip.mp4"
   python generate_card_animation.py --set AFR --card "Acererak the Archlich" --number 372 --video "clip.mp4"
 
 Examples:
-  python generate_card_animation.py AFR "Improvised Weaponry" "minimax-h3_animate-this-scene.mp4"
+  python generate_card_animation.py AFR "Improvised Weaponry" "minimax-h3_animate-this-scene.mp4" 150
   python generate_card_animation.py AFR "Acererak the Archlich" "clip.mp4" 372
   python generate_card_animation.py AFR "Acererak the Archlich" 372 "clip.mp4"
-  python generate_card_animation.py FDN "Burst Lightning" "burst_lightning.mp4" --fps 24
+  python generate_card_animation.py FDN "Burst Lightning" "burst_lightning.mp4" 192 --fps 24
 """
 
 import argparse
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -36,7 +37,6 @@ try:
     import requests
     HAS_REQUESTS = True
 except ImportError:
-    import json
     import urllib.error
     import urllib.parse
     import urllib.request
@@ -73,12 +73,14 @@ def get_platform_cache_dir() -> Path:
 
 
 def get_default_target_dirs() -> list[str]:
-    """Target directory for animated cards deployment - strictly in target distribution."""
-    snapshot_dir = Path("/System/Volumes/Data/ugreen_projects/forge/forge-installer/target/forge-installer-2.0.15-SNAPSHOT")
-    if not snapshot_dir.is_dir():
-        snapshot_dir = REPO_ROOT / "forge-installer" / "target" / "forge-installer-2.0.15-SNAPSHOT"
-    if sys.platform == "win32" and not snapshot_dir.is_dir():
-        snapshot_dir = Path(r"D:\projects\forge\forge-installer\target\forge-installer-2.0.15-SNAPSHOT")
+    """Return generated Forge distributions that can receive animation assets."""
+    installer_target = REPO_ROOT / "forge-installer" / "target"
+    distributions = sorted(
+        (path for path in installer_target.glob("forge-installer-*") if path.is_dir()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ) if installer_target.is_dir() else []
+    snapshot_dir = distributions[0] if distributions else installer_target / "forge-installer-2.0.15-SNAPSHOT"
 
     targets = [
         str(snapshot_dir / "res" / "animated_cards"),
@@ -275,13 +277,15 @@ def find_local_card_image(
             f"{num_clean}_{name_clean}.jpg",
         ])
 
-    # 3. Base un-indexed filenames
-    candidates.extend([
-        f"{name_clean}.fullborder.jpg",
-        f"{name_clean}.fullborder.png",
-        f"{name_clean}.jpg",
-        f"{name_clean}.png",
-    ])
+    # 3. A bare filename is safe only when the edition has one art. For multi-art
+    # cards it may belong to a different collector number.
+    if art_count <= 1:
+        candidates.extend([
+            f"{name_clean}.fullborder.jpg",
+            f"{name_clean}.fullborder.png",
+            f"{name_clean}.jpg",
+            f"{name_clean}.png",
+        ])
 
     for base_dir in CACHE_SEARCH_DIRS:
         if not os.path.isdir(base_dir):
@@ -482,6 +486,32 @@ def extract_video_frames(video_path: str, output_dir: str, fps: int = 24) -> lis
     return extracted
 
 
+def probe_video(video_path: str) -> tuple[float | None, float | None, int | None]:
+    """Return duration, source FPS, and estimated frame count when ffprobe is available."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=avg_frame_rate,nb_frames:format=duration",
+        "-of", "json", video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            return None, None, None
+        data = json.loads(result.stdout)
+        stream = (data.get("streams") or [{}])[0]
+        duration = float((data.get("format") or {}).get("duration"))
+        rate = stream.get("avg_frame_rate", "0/1")
+        numerator, denominator = rate.split("/", 1)
+        source_fps = float(numerator) / float(denominator) if float(denominator) else None
+        frame_count = stream.get("nb_frames")
+        estimated_frames = int(frame_count) if frame_count and frame_count != "N/A" else (
+            round(duration * source_fps) if source_fps else None
+        )
+        return duration, source_fps, estimated_frames
+    except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+        return None, None, None
+
+
 def is_video_path(val: str | None) -> bool:
     """Check if a string argument represents a video file or path."""
     if not val:
@@ -510,20 +540,43 @@ def process_card_animation(
     art_h: int = DEFAULT_ART_H,
     custom_template: str | None = None,
     keep_temp: bool = False,
+    assume_yes: bool = False,
 ):
     video_path = os.path.abspath(video_path)
     if not os.path.isfile(video_path):
         sys.exit(f"[ERROR] Video file not found: {video_path}")
 
-    # Resolve art index and total variants for this card in the set
+    if not card_number:
+        sys.exit("[ERROR] CARD_NUMBER is required so the animation can be bound to one exact printing.")
+
+    # Resolve art index and total variants for this card in the set.
     art_index, art_count = resolve_art_info(set_code, card_name, card_number)
-    if card_number:
-        if art_index:
-            print(f"[+] Card: '{card_name}' #{card_number} (set: {set_code.upper()}) -> Art Variant {art_index}/{art_count}")
-        else:
-            print(f"[+] Card: '{card_name}' #{card_number} (set: {set_code.upper()})")
-    else:
-        print(f"[+] Card: '{card_name}' (set: {set_code.upper()})")
+    if art_index is None:
+        sys.exit(
+            f"[ERROR] Could not find '{card_name}' #{card_number} in Forge edition data for set {set_code.upper()}. "
+            "Check the exact card name, set code, and collector number."
+        )
+
+    duration, source_fps, source_frames = probe_video(video_path)
+    print("\nAnimation target")
+    print(f"  Set:              {set_code.upper()}")
+    print(f"  Card:             {card_name}")
+    print(f"  Collector number: {card_number} (art {art_index} of {art_count})")
+    print(f"  Video:            {video_path}")
+    if duration is not None:
+        details = f"{duration:.2f}s"
+        if source_fps is not None:
+            details += f", {source_fps:.2f} source FPS"
+        if source_frames is not None:
+            details += f", {source_frames} source frames"
+        print(f"  Video details:    {details}")
+    print(f"  Output rate:      {fps} FPS")
+
+    if not assume_yes and sys.stdin.isatty():
+        answer = input("\nGenerate and replace this printing's animation? [y/N] ").strip().lower()
+        if answer not in {"y", "yes"}:
+            print("[CANCELLED] No files were changed.")
+            return
 
     # 1. Locate or download card base template
     template_path = None
@@ -551,13 +604,6 @@ def process_card_animation(
             cache_target = str(cache_dir / "pics" / "cards" / set_code.upper() / cache_filename)
             if download_card_image_from_scryfall(set_code, card_name, cache_target, card_number=card_number):
                 template_path = cache_target
-                # If cached under an indexed name, also ensure a base unindexed copy exists as fallback
-                unindexed_target = str(cache_dir / "pics" / "cards" / set_code.upper() / f"{card_name}.fullborder.jpg")
-                if not os.path.exists(unindexed_target):
-                    try:
-                        shutil.copy2(cache_target, unindexed_target)
-                    except Exception:
-                        pass
             else:
                 num_msg = f" #{card_number}" if card_number else ""
                 sys.exit(f"[ERROR] Could not find or download card template for '{card_name}'{num_msg} ({set_code}).")
@@ -600,62 +646,43 @@ def process_card_animation(
         # 4. Deploy to all active Forge destinations
         print("\n[*] Deploying animated frames to Forge directories:")
         clean_card = card_name.strip()
-        clean_set = set_code.strip()
-        target_subfolders = []
+        clean_set = set_code.strip().upper()
+        clean_num = str(card_number).strip()
         target_dirs = get_default_target_dirs()
-
-        if card_number:
-            clean_num = str(card_number).strip()
-            # Clean up any stale unnumbered folder that would inadvertently match ALL arts/cards with this name
-            for base_target in target_dirs:
-                stale_bare = os.path.join(base_target, clean_card)
-                if os.path.isdir(stale_bare):
-                    try:
-                        shutil.rmtree(stale_bare)
-                        print(f"  [CLEANUP] Removed stale bare folder to avoid overriding all arts: {stale_bare}")
-                    except Exception as ex:
-                        print(f"  [WARN] Could not remove stale bare folder {stale_bare}: {ex}")
-
-            # Specific collector number / art variant deployment targets
-            target_subfolders.append(f"{clean_card}_{clean_num}")
-            target_subfolders.append(f"{clean_set}_{clean_card}_{clean_num}")
-            target_subfolders.append(f"{clean_set}_{clean_num}")
-            target_subfolders.append(os.path.join(clean_set, f"{clean_card}_{clean_num}"))
-            target_subfolders.append(os.path.join(clean_set, clean_num))
-            if art_index is not None:
-                target_subfolders.append(f"{clean_card}{art_index}")
-                target_subfolders.append(f"{clean_set}_{clean_card}{art_index}")
-                target_subfolders.append(os.path.join(clean_set, f"{clean_card}{art_index}"))
-        else:
-            target_subfolders.append(clean_card)
-            target_subfolders.append(f"{clean_set}_{clean_card}")
-            target_subfolders.append(os.path.join(clean_set, clean_card))
-            if art_index is not None:
-                target_subfolders.append(f"{clean_card}{art_index}")
-                target_subfolders.append(f"{clean_set}_{clean_card}{art_index}")
-                target_subfolders.append(os.path.join(clean_set, f"{clean_card}{art_index}"))
-
-        # Deduplicate while preserving order
-        seen_subs = set()
-        deduped_subs = []
-        for s in target_subfolders:
-            norm_s = os.path.normpath(s)
-            if norm_s not in seen_subs:
-                seen_subs.add(norm_s)
-                deduped_subs.append(s)
 
         deployed_count = 0
         for base_target in target_dirs:
-            for sub in deduped_subs:
-                dest_dir = os.path.join(base_target, sub)
-                try:
-                    os.makedirs(dest_dir, exist_ok=True)
-                    for f in os.listdir(composited_dir):
-                        shutil.copy2(os.path.join(composited_dir, f), os.path.join(dest_dir, f))
-                    print(f"  [OK] {dest_dir} ({len(raw_frames)} frames)")
-                    deployed_count += 1
-                except Exception as ex:
-                    print(f"  [SKIP] Could not write to {dest_dir}: {ex}")
+            # Remove aliases emitted by older versions. Those aliases were name-scoped and
+            # could animate every printing or art variant with the same name.
+            legacy_paths = [
+                clean_card,
+                f"{clean_card}_{clean_num}",
+                f"{clean_set}_{clean_card}_{clean_num}",
+                f"{clean_set}_{clean_num}",
+                os.path.join(clean_set, f"{clean_card}_{clean_num}"),
+                os.path.join(clean_set, f"{clean_card}{art_index}"),
+            ]
+            for legacy_subpath in legacy_paths:
+                legacy_path = os.path.join(base_target, legacy_subpath)
+                if os.path.isdir(legacy_path):
+                    shutil.rmtree(legacy_path)
+                    print(f"  [CLEANUP] {legacy_path}")
+
+            # Set + collector number is Forge's unique printing identity.
+            dest_dir = os.path.join(base_target, clean_set, clean_num)
+            try:
+                if os.path.isdir(dest_dir):
+                    shutil.rmtree(dest_dir)
+                os.makedirs(dest_dir, exist_ok=True)
+                for frame_file in os.listdir(composited_dir):
+                    shutil.copy2(os.path.join(composited_dir, frame_file), os.path.join(dest_dir, frame_file))
+                print(f"  [OK] {dest_dir} ({len(raw_frames)} frames)")
+                deployed_count += 1
+            except Exception as ex:
+                print(f"  [SKIP] Could not write to {dest_dir}: {ex}")
+
+        if deployed_count == 0:
+            sys.exit("[ERROR] No Forge distribution directory could be updated.")
 
         num_msg = f" (collector #{card_number})" if card_number else ""
         print(f"\n[SUCCESS] Successfully generated and deployed animation for '{card_name}'{num_msg} ({len(raw_frames)} frames @ {fps} FPS)!")
@@ -684,7 +711,7 @@ def main():
     parser.add_argument("-s", "--set", dest="flag_set", help="Card set code (e.g. AFR, MH2, FDN)")
     parser.add_argument("-c", "--card", dest="flag_card", help="Card name (e.g. 'Improvised Weaponry')")
     parser.add_argument("-v", "--video", dest="flag_video", help="Path to input MP4 video clip")
-    parser.add_argument("-n", "--number", "--num", "--card-number", dest="flag_number", help="Card collector number (e.g. 372, 87)")
+    parser.add_argument("-n", "--number", "--num", "--card-number", dest="flag_number", help="Required card collector number (e.g. 372, 87)")
 
     parser.add_argument("--fps", type=int, default=24, help="Target animation FPS (default: 24)")
     parser.add_argument("--quality", type=int, default=88, help="JPEG quality 1-100 (default: 88)")
@@ -696,6 +723,7 @@ def main():
     parser.add_argument("--height", type=int, default=DEFAULT_ART_H, help=f"Art window height (default: {DEFAULT_ART_H})")
 
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary frame directory for debugging")
+    parser.add_argument("-y", "--yes", action="store_true", help="Skip the interactive target confirmation")
 
     args = parser.parse_args()
 
@@ -734,9 +762,9 @@ def main():
         elif card_number and not video_path:
             video_path = pos_3
 
-    if not set_code or not card_name or not video_path:
+    if not set_code or not card_name or not video_path or not card_number:
         parser.print_help()
-        sys.exit("\n[ERROR] Missing required arguments: SET, CARD_NAME, and VIDEO_PATH are required.")
+        sys.exit("\n[ERROR] Missing required arguments: SET, CARD_NAME, CARD_NUMBER, and VIDEO_PATH are required.")
 
     process_card_animation(
         set_code=set_code,
@@ -751,6 +779,7 @@ def main():
         art_h=args.height,
         custom_template=args.template,
         keep_temp=args.keep_temp,
+        assume_yes=args.yes,
     )
 
 

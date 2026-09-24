@@ -80,11 +80,18 @@ public final class CardAnimationManager {
         }
     }
 
-    private static String normalize(String name) {
+    private static String key(String name) {
         if (name == null) {
             return "";
         }
-        return name.toLowerCase().replaceAll("[^a-z0-9]", "");
+        String result = name.trim().toLowerCase().replace('\\', '/');
+        while (result.startsWith("/")) {
+            result = result.substring(1);
+        }
+        while (result.endsWith("/")) {
+            result = result.substring(0, result.length() - 1);
+        }
+        return result;
     }
 
     private void scanDirectory(File animDir) {
@@ -98,31 +105,21 @@ public final class CardAnimationManager {
         }
 
         for (File folder : folders) {
-            String folderName = folder.getName().toLowerCase().trim();
-            String normKey = normalize(folder.getName());
-            boolean loaded = loadCardFolder(folder, folderName, normKey);
+            String folderName = key(folder.getName());
+            boolean loaded = loadCardFolder(folder, folderName);
             if (!loaded) {
                 // Might be a set folder (e.g. animDir/FIN/Jumbo Cactuar_191)
                 File[] subFolders = folder.listFiles(File::isDirectory);
                 if (subFolders != null) {
                     for (File sub : subFolders) {
-                        String setCardSlash = (folderName + "/" + sub.getName()).toLowerCase().trim();
-                        String setCardUnder = (folderName + "_" + sub.getName()).toLowerCase().trim();
-                        String subName = sub.getName().toLowerCase().trim();
-                        String subNorm = normalize(sub.getName());
-                        loadCardFolder(sub, setCardSlash, setCardUnder);
-                        if (animationFiles.containsKey(setCardSlash)) {
-                            File[] f = animationFiles.get(setCardSlash);
-                            animationFiles.putIfAbsent(subName, f);
-                            animationFiles.putIfAbsent(subNorm, f);
-                        }
+                        loadCardFolder(sub, folderName + "/" + key(sub.getName()));
                     }
                 }
             }
         }
     }
 
-    private boolean loadCardFolder(File folder, String cardName, String normKey) {
+    private boolean loadCardFolder(File folder, String... keys) {
         File[] frameFiles = folder.listFiles((dir, name) -> {
             String lower = name.toLowerCase();
             return lower.endsWith(".jpg") || lower.endsWith(".png") || lower.endsWith(".jpeg");
@@ -133,14 +130,16 @@ public final class CardAnimationManager {
         }
 
         Arrays.sort(frameFiles, Comparator.comparing(File::getName));
-        animationFiles.put(cardName, frameFiles);
-        animationFiles.put(normKey, frameFiles);
+        for (String animationKey : keys) {
+            animationFiles.put(key(animationKey), frameFiles);
+        }
         System.out.println("[CardAnimationManager-Mobile] Registered animation files for card '" + folder.getName() + "' with " + frameFiles.length + " frames.");
         return true;
     }
 
-    private synchronized boolean tryLoadCard(String rawName, String key, String normKey) {
-        if (animationFiles.containsKey(key) || animationFiles.containsKey(normKey)) {
+    private synchronized boolean tryLoadCard(String rawName) {
+        String animationKey = key(rawName);
+        if (animationFiles.containsKey(animationKey)) {
             return true;
         }
 
@@ -149,48 +148,9 @@ public final class CardAnimationManager {
                 continue;
             }
 
-            File directFolder = new File(baseDir, rawName);
-            if (directFolder.isDirectory() && loadCardFolder(directFolder, key, normKey)) {
+            File directFolder = new File(baseDir, rawName.replace('/', File.separatorChar));
+            if (directFolder.isDirectory() && loadCardFolder(directFolder, animationKey)) {
                 return true;
-            }
-
-            File directFolderLower = new File(baseDir, key);
-            if (directFolderLower.isDirectory() && loadCardFolder(directFolderLower, key, normKey)) {
-                return true;
-            }
-
-            File[] subs = baseDir.listFiles(File::isDirectory);
-            if (subs != null) {
-                for (File sub : subs) {
-                    String subName = sub.getName().toLowerCase().trim();
-                    String subNorm = normalize(sub.getName());
-                    if (subName.equals(key) || subNorm.equals(normKey)) {
-                        if (loadCardFolder(sub, key, normKey)) {
-                            return true;
-                        }
-                    }
-
-                    // Check 1 level down inside subfolder (e.g. baseDir/FIN/...)
-                    File subDirect = new File(sub, rawName);
-                    if (subDirect.isDirectory() && loadCardFolder(subDirect, key, normKey)) {
-                        return true;
-                    }
-                    File[] subSubs = sub.listFiles(File::isDirectory);
-                    if (subSubs != null) {
-                        for (File subSub : subSubs) {
-                            String ssName = subSub.getName().toLowerCase().trim();
-                            String ssNorm = normalize(subSub.getName());
-                            String slashKey = (subName + "/" + ssName).toLowerCase().trim();
-                            String underKey = (subName + "_" + ssName).toLowerCase().trim();
-                            if (ssName.equals(key) || ssNorm.equals(normKey)
-                                    || slashKey.equals(key) || underKey.equals(key)) {
-                                if (loadCardFolder(subSub, key, normKey)) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
         return false;
@@ -203,19 +163,11 @@ public final class CardAnimationManager {
         if (!INSTANCE.initialized) {
             INSTANCE.initialize();
         }
-        String key = cardName.toLowerCase().trim();
-        String normKey = normalize(key);
-        if (INSTANCE.animationFiles.containsKey(key) || INSTANCE.animationFiles.containsKey(normKey)) {
+        String animationKey = key(cardName);
+        if (INSTANCE.animationFiles.containsKey(animationKey)) {
             return true;
         }
-        for (String k : INSTANCE.animationFiles.keySet()) {
-            if (k.startsWith(key + "_") || k.startsWith(key + "1")
-                    || k.endsWith("/" + key) || k.endsWith("/" + key + "1")
-                    || k.endsWith("_" + key) || k.endsWith("_" + key + "1")) {
-                return true;
-            }
-        }
-        return INSTANCE.tryLoadCard(cardName, key, normKey);
+        return INSTANCE.tryLoadCard(cardName);
     }
 
     public static boolean hasAnimation(String cardName, int artIndex, String collectorNumber) {
@@ -230,43 +182,18 @@ public final class CardAnimationManager {
         String col = (collectorNumber != null && !collectorNumber.isEmpty() && !"N.A.".equalsIgnoreCase(collectorNumber))
                 ? collectorNumber.trim() : null;
 
-        if (!ed.isEmpty() && col != null) {
-            if (hasAnimation(ed + "/" + cardName + "_" + col)
-                    || hasAnimation(ed + "_" + cardName + "_" + col)
-                    || hasAnimation(ed + "/" + col)
-                    || hasAnimation(ed + "_" + col)) {
-                return true;
-            }
-        }
-        if (col != null) {
-            String colKey = cardName + "_" + col;
-            if (hasAnimation(colKey)) {
-                return true;
-            }
-        }
-
-        int art = artIndex > 0 ? artIndex : 1;
-        if (!ed.isEmpty()) {
-            if (hasAnimation(ed + "/" + cardName + art)
-                    || hasAnimation(ed + "_" + cardName + art)) {
-                return true;
-            }
-        }
-        String artKey = cardName + art;
-        if (hasAnimation(artKey)) {
+        if (!ed.isEmpty() && col != null && hasAnimation(ed + "/" + col)) {
             return true;
         }
 
-        if (!ed.isEmpty() && artIndex <= 1) {
-            if (hasAnimation(ed + "/" + cardName)
-                    || hasAnimation(ed + "_" + cardName)) {
-                return true;
-            }
+        int art = artIndex > 0 ? artIndex : 1;
+        if (!ed.isEmpty() && hasAnimation(ed + "/" + cardName + art + ".full")) {
+            return true;
         }
-        if (artIndex > 1) {
-            return false;
+        if (!ed.isEmpty() && artIndex <= 1 && hasAnimation(ed + "/" + cardName + ".full")) {
+            return true;
         }
-        return hasAnimation(cardName);
+        return ed.isEmpty() && col == null && artIndex <= 0 && hasAnimation(cardName);
     }
 
     public static boolean isAnimationTexture(Texture texture) {
@@ -281,41 +208,13 @@ public final class CardAnimationManager {
             INSTANCE.initialize();
         }
 
-        String key = cardName.toLowerCase().trim();
-        Texture[] textures = INSTANCE.animationTextures.get(key);
-        if (textures == null) {
-            textures = INSTANCE.animationTextures.get(normalize(key));
-        }
+        String animationKey = key(cardName);
+        Texture[] textures = INSTANCE.animationTextures.get(animationKey);
 
         if (textures == null) {
-            File[] files = INSTANCE.animationFiles.get(key);
-            if (files == null) {
-                files = INSTANCE.animationFiles.get(normalize(key));
-            }
-            if (files == null) {
-                files = INSTANCE.animationFiles.get(key + "1");
-            }
-            if (files == null) {
-                files = INSTANCE.animationFiles.get(normalize(key + "1"));
-            }
-            if (files == null) {
-                if (INSTANCE.tryLoadCard(cardName, key, normalize(key))) {
-                    files = INSTANCE.animationFiles.get(key);
-                    if (files == null) {
-                        files = INSTANCE.animationFiles.get(normalize(key));
-                    }
-                }
-            }
-            if (files == null) {
-                for (Map.Entry<String, File[]> entry : INSTANCE.animationFiles.entrySet()) {
-                    String k = entry.getKey();
-                    if (k.startsWith(key + "_") || k.startsWith(key + "1")
-                            || k.endsWith("/" + key) || k.endsWith("/" + key + "1")
-                            || k.endsWith("_" + key) || k.endsWith("_" + key + "1")) {
-                        files = entry.getValue();
-                        break;
-                    }
-                }
+            File[] files = INSTANCE.animationFiles.get(animationKey);
+            if (files == null && INSTANCE.tryLoadCard(cardName)) {
+                files = INSTANCE.animationFiles.get(animationKey);
             }
             if (files == null || files.length == 0) {
                 return null;
@@ -326,8 +225,7 @@ public final class CardAnimationManager {
                 return null;
             }
 
-            INSTANCE.animationTextures.put(key, textures);
-            INSTANCE.animationTextures.put(normalize(key), textures);
+            INSTANCE.animationTextures.put(animationKey, textures);
         }
 
         if (textures.length == 0) {
@@ -359,61 +257,23 @@ public final class CardAnimationManager {
         String col = (collectorNumber != null && !collectorNumber.isEmpty() && !"N.A.".equalsIgnoreCase(collectorNumber))
                 ? collectorNumber.trim() : null;
 
-        if (!ed.isEmpty() && col != null) {
-            String edColCardSlash = ed + "/" + cardName + "_" + col;
-            if (hasAnimation(edColCardSlash)) {
-                return getCurrentFrame(edColCardSlash);
-            }
-            String edColCardUnder = ed + "_" + cardName + "_" + col;
-            if (hasAnimation(edColCardUnder)) {
-                return getCurrentFrame(edColCardUnder);
-            }
-            String edColSlash = ed + "/" + col;
-            if (hasAnimation(edColSlash)) {
-                return getCurrentFrame(edColSlash);
-            }
-            String edColUnder = ed + "_" + col;
-            if (hasAnimation(edColUnder)) {
-                return getCurrentFrame(edColUnder);
-            }
-        }
-        if (col != null) {
-            String colKey = cardName + "_" + col;
-            if (hasAnimation(colKey)) {
-                return getCurrentFrame(colKey);
-            }
+        if (!ed.isEmpty() && col != null && hasAnimation(ed + "/" + col)) {
+            return getCurrentFrame(ed + "/" + col);
         }
 
         int art = artIndex > 0 ? artIndex : 1;
-        if (!ed.isEmpty()) {
-            String edArtSlash = ed + "/" + cardName + art;
-            if (hasAnimation(edArtSlash)) {
-                return getCurrentFrame(edArtSlash);
-            }
-            String edArtUnder = ed + "_" + cardName + art;
-            if (hasAnimation(edArtUnder)) {
-                return getCurrentFrame(edArtUnder);
-            }
-        }
-        String artKey = cardName + art;
-        if (hasAnimation(artKey)) {
-            return getCurrentFrame(artKey);
+        String imagePath = ed + "/" + cardName + art + ".full";
+        if (!ed.isEmpty() && hasAnimation(imagePath)) {
+            return getCurrentFrame(imagePath);
         }
 
         if (!ed.isEmpty() && artIndex <= 1) {
-            String edCardSlash = ed + "/" + cardName;
-            if (hasAnimation(edCardSlash)) {
-                return getCurrentFrame(edCardSlash);
-            }
-            String edCardUnder = ed + "_" + cardName;
-            if (hasAnimation(edCardUnder)) {
-                return getCurrentFrame(edCardUnder);
+            String singleArtPath = ed + "/" + cardName + ".full";
+            if (hasAnimation(singleArtPath)) {
+                return getCurrentFrame(singleArtPath);
             }
         }
-        if (artIndex > 1) {
-            return null;
-        }
-        return getCurrentFrame(cardName);
+        return ed.isEmpty() && col == null && artIndex <= 0 ? getCurrentFrame(cardName) : null;
     }
 
     private static synchronized Texture[] loadTextures(File[] files) {

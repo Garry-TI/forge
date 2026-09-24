@@ -16,6 +16,7 @@ import forge.adventure.util.Reward;
 import forge.adventure.util.RewardActor;
 import forge.assets.*;
 import forge.item.InventoryItem;
+import forge.item.IPaperCard;
 import forge.item.PaperCard;
 import forge.util.*;
 import org.apache.commons.lang3.StringUtils;
@@ -826,8 +827,10 @@ public class CardImageRenderer {
         String key = card.getState(altState).getImageKey();
         Texture image = null;
         String cardName = (card.getState(altState) != null) ? card.getState(altState).getName() : card.getName();
-        if (canshow && cardName != null && CardAnimationManager.hasAnimation(cardName)) {
-            image = CardAnimationManager.getCurrentFrame(cardName);
+        IPaperCard paperCard = card.getPaperCard();
+        if (canshow && paperCard != null
+                && CardAnimationManager.hasAnimation(cardName, paperCard.getEdition(), paperCard.getArtIndex(), paperCard.getCollectorNumber())) {
+            image = CardAnimationManager.getCurrentFrame(cardName, paperCard.getEdition(), paperCard.getArtIndex(), paperCard.getCollectorNumber());
         }
         if (image == null) {
             image = new CachedCardImageRenderer(key).getImage();

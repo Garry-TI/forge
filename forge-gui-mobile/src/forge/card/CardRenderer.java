@@ -637,8 +637,8 @@ public class CardRenderer {
 
     public static void drawCard(Graphics g, IPaperCard pc, float x, float y, float w, float h, CardStackPosition pos) {
         Texture image = null;
-        if (pc != null && CardAnimationManager.hasAnimation(pc.getName())) {
-            image = CardAnimationManager.getCurrentFrame(pc.getName());
+        if (pc != null && CardAnimationManager.hasAnimation(pc.getName(), pc.getEdition(), pc.getArtIndex(), pc.getCollectorNumber())) {
+            image = CardAnimationManager.getCurrentFrame(pc.getName(), pc.getEdition(), pc.getArtIndex(), pc.getCollectorNumber());
         }
         if (image == null) {
             image = new RendererCachedCardImage(pc, false).getImage();
@@ -690,9 +690,11 @@ public class CardRenderer {
         boolean canshow = MatchController.instance.mayView(card);
         boolean showsleeves = card.isFaceDown() && card.isInZone(EnumSet.of(ZoneType.Exile));
         Texture image = null;
+        IPaperCard paperCard = card != null ? card.getPaperCard() : null;
         String cardName = (card != null && card.getCurrentState() != null) ? card.getCurrentState().getName() : (card != null ? card.getName() : null);
-        if (canshow && !showsleeves && cardName != null && CardAnimationManager.hasAnimation(cardName)) {
-            image = CardAnimationManager.getCurrentFrame(cardName);
+        if (canshow && !showsleeves && paperCard != null
+                && CardAnimationManager.hasAnimation(cardName, paperCard.getEdition(), paperCard.getArtIndex(), paperCard.getCollectorNumber())) {
+            image = CardAnimationManager.getCurrentFrame(cardName, paperCard.getEdition(), paperCard.getArtIndex(), paperCard.getCollectorNumber());
         }
         if (image == null) {
             image = new RendererCachedCardImage(card, false).getImage(showAltState ? card.getAlternateState().getImageKey() : card.getCurrentState().getImageKey());
